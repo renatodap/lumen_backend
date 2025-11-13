@@ -1,14 +1,11 @@
 package middleware
 
 import (
-	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	apperrors "github.com/lumen/backend-go/pkg/errors"
-	"github.com/lumen/backend-go/pkg/logger"
-	"go.uber.org/zap"
+	apperrors "github.com/lumen/backend/pkg/errors"
 )
 
 type AuthMiddleware struct {
@@ -42,7 +39,6 @@ func (m *AuthMiddleware) Authenticate() gin.HandlerFunc {
 		token := parts[1]
 		userID, err := m.validateToken(token)
 		if err != nil {
-			logger.Warn("Invalid token", zap.Error(err))
 			appErr := apperrors.NewUnauthorized("invalid or expired token")
 			c.JSON(appErr.StatusCode, appErr)
 			c.Abort()

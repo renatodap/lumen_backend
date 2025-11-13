@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/lumen/backend-go/pkg/logger"
+	"github.com/lumen/backend/pkg/logger"
 	"go.uber.org/zap"
 )
 

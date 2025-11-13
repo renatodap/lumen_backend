@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lumen/backend-go/internal/repository"
+	"github.com/lumen/backend/internal/repository"
 )
 
 type HealthHandler struct {

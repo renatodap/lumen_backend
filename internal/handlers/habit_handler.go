@@ -5,10 +5,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/lumen/backend-go/internal/models"
-	"github.com/lumen/backend-go/internal/repository"
-	apperrors "github.com/lumen/backend-go/pkg/errors"
-	"github.com/lumen/backend-go/pkg/logger"
+	"github.com/lumen/backend/internal/models"
+	"github.com/lumen/backend/internal/repository"
+	apperrors "github.com/lumen/backend/pkg/errors"
+	"github.com/lumen/backend/pkg/logger"
 	"go.uber.org/zap"
 )
 
