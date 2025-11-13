@@ -1,0 +1,11 @@
+bin/
+.env
+.env.*
+!.env.example
+*.log
+coverage.out
+coverage.html
+.git
+.gitignore
+README.md
+Makefile
