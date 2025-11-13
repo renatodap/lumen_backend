@@ -1,644 +1,449 @@
-# LUMEN Backend Deployment Guide
+# LUMEN Deployment Guide
+
+**Production Deployment: Supabase + Railway + Vercel**
+
+---
 
 ## Prerequisites
 
-- Go 1.21 or higher
-- PostgreSQL database (via Supabase)
-- Environment variables configured
+1. Supabase account (database)
+2. Railway account (backend hosting)
+3. Vercel account (frontend hosting)
+4. GitHub repositories (already created)
 
-## Local Development
+---
 
-### 1. Setup Environment
+## Step 1: Supabase Database Setup
 
-Copy the example environment file:
-```bash
-cp .env.example .env
+### 1.1 Create Supabase Project
 ```
-
-Update `.env` with your credentials:
-```env
-# Server
-PORT=8080
-GIN_MODE=debug
-ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
-
-# Database (Supabase)
-DB_HOST=db.your-project.supabase.co
-DB_PORT=5432
-DB_NAME=postgres
-DB_USER=postgres
-DB_PASSWORD=your-db-password
-DB_SSLMODE=require
-
-# Supabase
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-anon-key
-SUPABASE_SERVICE_KEY=your-service-role-key
-
-# JWT
-JWT_SECRET=your-secure-jwt-secret-minimum-32-characters
-
-# Logging
-LOG_LEVEL=debug
-LOG_FORMAT=json
-```
-
-### 2. Install Dependencies
-
-```bash
-go mod download
-```
-
-### 3. Run Development Server
-
-```bash
-# Using Go directly
-go run cmd/server/main.go
-
-# Or using Make
-make dev
-```
-
-The server will start on `http://localhost:8080`
-
-### 4. Test the API
-
-```bash
-# Health check
-curl http://localhost:8080/health
-
-# Expected response:
-# {
-#   "status": "ok",
-#   "timestamp": "2025-11-13T10:00:00Z",
-#   "service": "lumen-api",
-#   "version": "1.0.0",
-#   "database": "healthy"
-# }
-```
-
-## Supabase Setup
-
-### 1. Create Supabase Project
-
-1. Go to https://supabase.com
+1. Go to https://supabase.com/dashboard
 2. Click "New Project"
-3. Choose organization and region
-4. Set database password
-5. Wait for project to be created
+3. Project name: "lumen-production"
+4. Database password: [SAVE THIS - YOU'LL NEED IT]
+5. Region: Choose closest to your users (e.g., us-east-1)
+6. Click "Create new project" (takes ~2 minutes)
+```
 
-### 2. Get Connection Details
+### 1.2 Get Connection Details
+```
+1. Go to Project Settings > Database
+2. Copy these values:
 
-From Supabase Dashboard:
+   - Project URL: https://[project-ref].supabase.co
+   - Anon/Public Key: eyJh... (starts with eyJ)
+   - Service Role Key: eyJh... (different from anon key)
+   - Database Password: [the one you set in 1.1]
 
-1. Go to Settings → Database
-2. Find "Connection string" section
-3. Copy the connection parameters:
-   - Host: `db.xxxxx.supabase.co`
-   - Port: `5432`
-   - Database: `postgres`
-   - User: `postgres`
-   - Password: (your database password)
+3. Connection string format:
+   postgresql://postgres:[YOUR-PASSWORD]@db.[project-ref].supabase.co:5432/postgres
+```
 
-4. Go to Settings → API
-5. Copy:
-   - Project URL (SUPABASE_URL)
-   - Anon public key (SUPABASE_KEY)
-   - Service role key (SUPABASE_SERVICE_KEY)
-
-### 3. Create Database Schema
-
-Run the following SQL in Supabase SQL Editor:
-
+### 1.3 Run Database Migrations
 ```sql
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Go to SQL Editor in Supabase Dashboard
+-- Run this migration to create all tables:
 
 -- Users table
 CREATE TABLE users (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
-  name TEXT,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Areas table
+CREATE TABLE areas (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  icon TEXT,
+  color TEXT,
+  order_index INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Goals table
+CREATE TABLE goals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  area_id UUID REFERENCES areas(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  timeframe TEXT,
+  end_date DATE,
+  win_condition TEXT,
+  description TEXT,
+  status TEXT DEFAULT 'active',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Habits table
 CREATE TABLE habits (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  goal_id UUID REFERENCES goals(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
-  color TEXT NOT NULL,
-  icon TEXT NOT NULL,
-  frequency TEXT NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly')),
-  target_count INTEGER NOT NULL CHECK (target_count > 0),
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  frequency TEXT,
+  reminder_times JSONB,
+  icon TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Tasks table
 CREATE TABLE tasks (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  goal_id UUID REFERENCES goals(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
-  description TEXT,
-  horizon TEXT NOT NULL CHECK (horizon IN ('now', 'next', 'later', 'someday')),
-  priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
-  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done', 'archived')),
   due_date TIMESTAMPTZ,
+  horizon TEXT,
+  notes TEXT,
+  completed BOOLEAN DEFAULT FALSE,
   completed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Daily logs table
+-- Acceptance Criteria table
+CREATE TABLE acceptance_criteria (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  criteria_text TEXT NOT NULL,
+  day_type TEXT DEFAULT 'standard',
+  order_index INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Daily Logs table
 CREATE TABLE daily_logs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   date DATE NOT NULL,
-  morning_routine BOOLEAN DEFAULT FALSE,
-  evening_routine BOOLEAN DEFAULT FALSE,
-  water_intake INTEGER DEFAULT 0 CHECK (water_intake >= 0 AND water_intake <= 20),
-  sleep_hours DECIMAL(3,1) DEFAULT 0 CHECK (sleep_hours >= 0 AND sleep_hours <= 24),
-  energy_level INTEGER CHECK (energy_level >= 1 AND energy_level <= 5),
-  mood_rating INTEGER CHECK (mood_rating >= 1 AND mood_rating <= 5),
-  productivity_rating INTEGER CHECK (productivity_rating >= 1 AND productivity_rating <= 5),
-  notes TEXT,
+  goal_id UUID REFERENCES goals(id) ON DELETE SET NULL,
+  criteria_met JSONB,
+  day_won BOOLEAN DEFAULT FALSE,
+  win_condition_met BOOLEAN,
+  reflection TEXT,
+  planned_next_day BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(user_id, date)
+  UNIQUE(user_id, date, goal_id)
+);
+
+-- Habit Logs table
+CREATE TABLE habit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  habit_id UUID REFERENCES habits(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  logged_at TIMESTAMPTZ DEFAULT NOW(),
+  date DATE NOT NULL,
+  completed BOOLEAN DEFAULT TRUE,
+  notes TEXT
+);
+
+-- Provider Connections table
+CREATE TABLE provider_connections (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  access_token TEXT,
+  refresh_token TEXT,
+  token_expires_at TIMESTAMPTZ,
+  connected_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, provider)
 );
 
 -- Indexes for performance
-CREATE INDEX idx_habits_user_id ON habits(user_id);
-CREATE INDEX idx_habits_user_active ON habits(user_id, is_active);
-CREATE INDEX idx_tasks_user_id ON tasks(user_id);
+CREATE INDEX idx_habits_user ON habits(user_id);
 CREATE INDEX idx_tasks_user_horizon ON tasks(user_id, horizon);
-CREATE INDEX idx_tasks_user_status ON tasks(user_id, status);
 CREATE INDEX idx_daily_logs_user_date ON daily_logs(user_id, date);
+CREATE INDEX idx_habit_logs_habit_date ON habit_logs(habit_id, date);
+CREATE INDEX idx_areas_user ON areas(user_id);
+CREATE INDEX idx_goals_user ON goals(user_id);
 
--- Row Level Security (RLS)
+-- Enable Row Level Security
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE areas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE goals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE habits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE acceptance_criteria ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE habit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE provider_connections ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies
-CREATE POLICY "Users can view their own habits"
-  ON habits FOR SELECT
-  USING (auth.uid() = user_id);
+-- RLS Policies (Users can only access their own data)
+CREATE POLICY "Users can CRUD their own data" ON users
+FOR ALL USING (auth.uid() = id);
 
-CREATE POLICY "Users can insert their own habits"
-  ON habits FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can CRUD their own areas" ON areas
+FOR ALL USING (auth.uid() = user_id);
 
-CREATE POLICY "Users can update their own habits"
-  ON habits FOR UPDATE
-  USING (auth.uid() = user_id);
+CREATE POLICY "Users can CRUD their own goals" ON goals
+FOR ALL USING (auth.uid() = user_id);
 
-CREATE POLICY "Users can delete their own habits"
-  ON habits FOR DELETE
-  USING (auth.uid() = user_id);
+CREATE POLICY "Users can CRUD their own habits" ON habits
+FOR ALL USING (auth.uid() = user_id);
 
--- Similar policies for tasks and daily_logs
-CREATE POLICY "Users can view their own tasks"
-  ON tasks FOR SELECT
-  USING (auth.uid() = user_id);
+CREATE POLICY "Users can CRUD their own tasks" ON tasks
+FOR ALL USING (auth.uid() = user_id);
 
-CREATE POLICY "Users can insert their own tasks"
-  ON tasks FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can CRUD their own criteria" ON acceptance_criteria
+FOR ALL USING (auth.uid() = user_id);
 
-CREATE POLICY "Users can update their own tasks"
-  ON tasks FOR UPDATE
-  USING (auth.uid() = user_id);
+CREATE POLICY "Users can CRUD their own logs" ON daily_logs
+FOR ALL USING (auth.uid() = user_id);
 
-CREATE POLICY "Users can delete their own tasks"
-  ON tasks FOR DELETE
-  USING (auth.uid() = user_id);
+CREATE POLICY "Users can CRUD their own habit logs" ON habit_logs
+FOR ALL USING (auth.uid() = user_id);
 
-CREATE POLICY "Users can view their own daily logs"
-  ON daily_logs FOR SELECT
-  USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can insert their own daily logs"
-  ON daily_logs FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own daily logs"
-  ON daily_logs FOR UPDATE
-  USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can delete their own daily logs"
-  ON daily_logs FOR DELETE
-  USING (auth.uid() = user_id);
-
--- Updated at trigger function
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Apply trigger to all tables
-CREATE TRIGGER update_habits_updated_at
-  BEFORE UPDATE ON habits
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_tasks_updated_at
-  BEFORE UPDATE ON tasks
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_daily_logs_updated_at
-  BEFORE UPDATE ON daily_logs
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
+CREATE POLICY "Users can CRUD their own connections" ON provider_connections
+FOR ALL USING (auth.uid() = user_id);
 ```
 
-## Building for Production
+### 1.4 Enable Supabase Auth
+```
+1. Go to Authentication > Providers
+2. Enable Email provider (default)
+3. Optional: Enable Google OAuth, Microsoft OAuth
+4. Configure email templates (Settings > Auth > Email Templates)
+```
 
-### 1. Build Binary
+---
 
+## Step 2: Railway Backend Deployment
+
+### 2.1 Create Railway Project
+```
+1. Go to https://railway.app/dashboard
+2. Click "New Project"
+3. Select "Deploy from GitHub repo"
+4. Choose repository: renatodap/lumen_backend
+5. Railway auto-detects Dockerfile
+6. Click "Deploy"
+```
+
+### 2.2 Configure Environment Variables
+```
+1. In Railway dashboard, go to your service
+2. Click "Variables" tab
+3. Add these variables (click "Add Variable" for each):
+
+   GIN_MODE=release
+   APP_PORT=8080
+
+   DATABASE_URL=postgresql://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres
+
+   JWT_SECRET=[GENERATE A RANDOM 32+ CHARACTER STRING]
+   JWT_EXPIRY=24h
+   REFRESH_TOKEN_EXPIRY=168h
+
+   SUPABASE_URL=https://[PROJECT-REF].supabase.co
+   SUPABASE_SERVICE_KEY=[SERVICE ROLE KEY FROM SUPABASE]
+   SUPABASE_JWT_SECRET=[JWT SECRET FROM SUPABASE SETTINGS]
+
+   CORS_ALLOWED_ORIGINS=https://lumen-frontend-theta.vercel.app
+
+   LOG_LEVEL=info
+   RATE_LIMIT_REQUESTS=100
+   RATE_LIMIT_WINDOW=60s
+   RATE_LIMIT_ENABLED=true
+
+4. Click "Deploy" to restart with new variables
+```
+
+### 2.3 Get Railway Backend URL
+```
+1. Go to Settings tab
+2. Scroll to "Domains"
+3. Click "Generate Domain"
+4. Copy the URL: https://lumen-backend-production-xxxx.up.railway.app
+5. Save this - you'll need it for frontend
+```
+
+---
+
+## Step 3: Vercel Frontend Deployment
+
+### 3.1 Create Vercel Project
+```
+1. Go to https://vercel.com/dashboard
+2. Click "Add New" > "Project"
+3. Import repository: renatodap/lumen_frontend
+4. Framework: Next.js (auto-detected)
+5. Configure project (DON'T deploy yet)
+```
+
+### 3.2 Configure Environment Variables
+```
+1. In project settings, go to "Environment Variables"
+2. Add these variables:
+
+   NEXT_PUBLIC_SUPABASE_URL=https://[PROJECT-REF].supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=[ANON KEY FROM SUPABASE]
+   NEXT_PUBLIC_API_URL=https://[RAILWAY-BACKEND-URL]/api
+   NODE_ENV=production
+
+3. Apply to: Production, Preview, and Development
+4. Click "Deploy"
+```
+
+### 3.3 Update Backend CORS
+```
+1. Go back to Railway backend
+2. Update CORS_ALLOWED_ORIGINS variable to include Vercel URL:
+
+   CORS_ALLOWED_ORIGINS=https://lumen-frontend-theta.vercel.app,https://lumen-frontend-git-main-renatodaps-projects.vercel.app
+
+3. Redeploy backend
+```
+
+---
+
+## Step 4: Verification
+
+### 4.1 Test Backend Health
 ```bash
-# Build for current platform
-make build
+curl https://[RAILWAY-URL]/health
 
-# Or manually
-go build -o bin/server cmd/server/main.go
-
-# Cross-compile for Linux (from Windows/Mac)
-GOOS=linux GOARCH=amd64 go build -o bin/server-linux cmd/server/main.go
-```
-
-### 2. Run Production Server
-
-```bash
-# Set production environment
-export GIN_MODE=release
-export LOG_LEVEL=info
-
-# Run the binary
-./bin/server
-```
-
-## Docker Deployment
-
-### 1. Build Docker Image
-
-```bash
-make docker-build
-
-# Or manually
-docker build -t lumen-api:latest .
-```
-
-### 2. Run Container
-
-```bash
-# Create .env file with production values
-docker run -d \
-  --name lumen-api \
-  -p 8080:8080 \
-  --env-file .env \
-  lumen-api:latest
-```
-
-### 3. Docker Compose
-
-Create `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-
-services:
-  api:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - PORT=8080
-      - GIN_MODE=release
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_NAME=${DB_NAME}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_SSLMODE=require
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      - JWT_SECRET=${JWT_SECRET}
-      - LOG_LEVEL=info
-      - LOG_FORMAT=json
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-```
-
-Run with:
-```bash
-docker-compose up -d
-```
-
-## Cloud Deployment Options
-
-### Option 1: Railway
-
-1. Install Railway CLI:
-```bash
-npm install -g @railway/cli
-```
-
-2. Login and initialize:
-```bash
-railway login
-railway init
-```
-
-3. Add environment variables:
-```bash
-railway variables set PORT=8080
-railway variables set GIN_MODE=release
-railway variables set DB_HOST=your-db-host
-# ... add all other variables
-```
-
-4. Deploy:
-```bash
-railway up
-```
-
-### Option 2: Render
-
-1. Create `render.yaml`:
-
-```yaml
-services:
-  - type: web
-    name: lumen-api
-    env: go
-    buildCommand: go build -o server cmd/server/main.go
-    startCommand: ./server
-    envVars:
-      - key: PORT
-        value: 8080
-      - key: GIN_MODE
-        value: release
-      - key: DB_HOST
-        sync: false
-      - key: DB_PASSWORD
-        sync: false
-      # Add other environment variables
-```
-
-2. Connect GitHub repo to Render
-3. Add environment variables in Render dashboard
-4. Deploy
-
-### Option 3: Google Cloud Run
-
-1. Build and push to Google Container Registry:
-```bash
-gcloud builds submit --tag gcr.io/PROJECT-ID/lumen-api
-```
-
-2. Deploy to Cloud Run:
-```bash
-gcloud run deploy lumen-api \
-  --image gcr.io/PROJECT-ID/lumen-api \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars "GIN_MODE=release,PORT=8080,DB_HOST=..."
-```
-
-### Option 4: AWS ECS
-
-1. Create ECR repository:
-```bash
-aws ecr create-repository --repository-name lumen-api
-```
-
-2. Build and push:
-```bash
-docker tag lumen-api:latest AWS_ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/lumen-api:latest
-docker push AWS_ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/lumen-api:latest
-```
-
-3. Create ECS task definition and service through AWS Console or CLI
-
-## Environment Variables Reference
-
-### Required Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `PORT` | Server port | `8080` |
-| `DB_HOST` | Database host | `db.xxxxx.supabase.co` |
-| `DB_PORT` | Database port | `5432` |
-| `DB_NAME` | Database name | `postgres` |
-| `DB_USER` | Database user | `postgres` |
-| `DB_PASSWORD` | Database password | `your-secure-password` |
-| `DB_SSLMODE` | SSL mode | `require` |
-| `SUPABASE_URL` | Supabase project URL | `https://xxxxx.supabase.co` |
-| `SUPABASE_KEY` | Supabase anon key | `eyJhbGci...` |
-| `JWT_SECRET` | JWT signing secret | `min-32-chars-secret` |
-
-### Optional Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GIN_MODE` | Gin mode | `release` |
-| `LOG_LEVEL` | Log level | `info` |
-| `LOG_FORMAT` | Log format | `json` |
-| `ALLOWED_ORIGINS` | CORS origins | `*` |
-| `SUPABASE_SERVICE_KEY` | Service role key | - |
-
-## Monitoring & Health Checks
-
-### Health Check Endpoint
-
-```bash
-curl http://your-domain.com/health
-```
-
-Expected response:
-```json
+# Expected response:
 {
-  "status": "ok",
-  "timestamp": "2025-11-13T10:00:00Z",
-  "service": "lumen-api",
-  "version": "1.0.0",
-  "database": "healthy"
+  "status": "healthy",
+  "timestamp": "2025-11-13T17:30:00Z"
 }
 ```
 
-### Readiness Check
-
-```bash
-curl http://your-domain.com/ready
+### 4.2 Test Frontend
+```
+1. Open https://lumen-frontend-theta.vercel.app
+2. Should see LUMEN homepage
+3. Try to sign up/login (Supabase Auth)
+4. Open DevTools > Network tab
+5. Check API calls go to Railway backend
 ```
 
-### Metrics
-
-```bash
-curl http://your-domain.com/metrics
+### 4.3 Test Database Connection
+```
+1. Try creating a habit in frontend
+2. Check Supabase dashboard > Table Editor
+3. Verify data appears in habits table
 ```
 
-Returns database connection pool statistics.
+---
 
-## Security Checklist
+## Step 5: Post-Deployment Configuration
 
-- [ ] JWT_SECRET is at least 32 characters
-- [ ] Database password is strong
-- [ ] DB_SSLMODE is set to `require` in production
-- [ ] GIN_MODE is set to `release`
-- [ ] CORS origins are configured (not `*`)
-- [ ] Rate limiting is enabled (default: 100 req/min)
-- [ ] All secrets are in environment variables, not code
-- [ ] Supabase RLS policies are enabled
-- [ ] HTTPS is configured on hosting platform
-- [ ] API is behind a firewall/security group
+### 5.1 Generate JWT Secret (if not done)
+```bash
+# Use this command to generate secure secrets:
+openssl rand -base64 32
+# Copy output and use as JWT_SECRET
+```
+
+### 5.2 Supabase JWT Secret Location
+```
+1. Go to Supabase Dashboard > Settings > API
+2. Scroll to "JWT Settings"
+3. Copy "JWT Secret" value
+4. Use this for SUPABASE_JWT_SECRET in Railway
+```
+
+### 5.3 Update Frontend API URL (if backend URL changes)
+```
+1. Vercel Dashboard > Project > Settings > Environment Variables
+2. Edit NEXT_PUBLIC_API_URL
+3. Redeploy frontend
+```
+
+---
+
+## Environment Variables Summary
+
+### Frontend (Vercel)
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbG...
+NEXT_PUBLIC_API_URL=https://backend.railway.app/api
+NODE_ENV=production
+```
+
+### Backend (Railway)
+```env
+GIN_MODE=release
+APP_PORT=8080
+DATABASE_URL=postgresql://postgres:pass@db.xxxxx.supabase.co:5432/postgres
+JWT_SECRET=your-32-char-secret
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbG...
+SUPABASE_JWT_SECRET=your-jwt-secret
+CORS_ALLOWED_ORIGINS=https://lumen-frontend-theta.vercel.app
+```
+
+---
 
 ## Troubleshooting
 
-### Database Connection Failed
-
-1. Check database credentials in `.env`
-2. Verify Supabase project is active
-3. Check network connectivity
-4. Ensure SSL mode is correct
-
-```bash
-# Test connection
-psql "postgresql://postgres:password@db.xxx.supabase.co:5432/postgres?sslmode=require"
+### Backend won't connect to database
+```
+- Check DATABASE_URL format is correct
+- Verify password has no special characters that need URL encoding
+- Test connection from Railway logs
+- Check Supabase firewall allows Railway IP
 ```
 
-### Port Already in Use
-
-```bash
-# Find process using port 8080
-lsof -i :8080
-
-# Kill the process
-kill -9 <PID>
+### Frontend can't reach backend
+```
+- Verify NEXT_PUBLIC_API_URL is correct
+- Check CORS_ALLOWED_ORIGINS includes Vercel domain
+- Check Railway backend is running (logs)
+- Test backend /health endpoint directly
 ```
 
-### JWT Authentication Failing
-
-1. Verify JWT_SECRET is set
-2. Check token format: `Bearer <token>`
-3. Ensure token hasn't expired
-4. Validate token contains `user_id`
-
-### High Memory Usage
-
-1. Check database connection pool settings
-2. Monitor for connection leaks
-3. Review query efficiency
-
-```go
-// Adjust pool settings in config
-config.MaxConns = 10
-config.MinConns = 2
+### Authentication not working
+```
+- Verify SUPABASE_URL and keys match frontend/backend
+- Check Supabase Auth is enabled
+- Review Supabase Auth logs
+- Verify RLS policies are correct
 ```
 
-## Performance Optimization
-
-### Database Indexes
-
-Ensure these indexes exist:
-```sql
-CREATE INDEX IF NOT EXISTS idx_habits_user_id ON habits(user_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_user_horizon ON tasks(user_id, horizon);
-CREATE INDEX IF NOT EXISTS idx_daily_logs_user_date ON daily_logs(user_id, date);
+### Build failures
+```
+- Frontend: Check TypeScript errors, missing dependencies
+- Backend: Check Go module errors, Dockerfile syntax
+- Review build logs in Railway/Vercel dashboards
 ```
 
-### Connection Pool Tuning
+---
 
-In `config/config.go`:
-```go
-config.MaxConns = 25      // Max connections
-config.MinConns = 5       // Min idle connections
-config.MaxConnLifetime = time.Hour
-config.MaxConnIdleTime = 30 * time.Minute
-```
+## Deployment Checklist
 
-### Caching
+- [ ] Supabase project created
+- [ ] Database schema migrated
+- [ ] RLS policies enabled
+- [ ] Railway backend deployed
+- [ ] Backend environment variables configured
+- [ ] Backend health check passing
+- [ ] Vercel frontend deployed
+- [ ] Frontend environment variables configured
+- [ ] CORS configured correctly
+- [ ] Test user signup/login
+- [ ] Test habit creation
+- [ ] Test data persistence
+- [ ] Monitor logs for errors
 
-Consider adding Redis for:
-- Session storage
-- API response caching
-- Rate limit counters
+---
 
-## Backup & Recovery
+## Next Steps
 
-### Database Backup
+1. **Set up monitoring**: Add Sentry or LogRocket
+2. **Configure custom domain**: Point your domain to Vercel
+3. **Enable analytics**: Vercel Analytics, Supabase Analytics
+4. **Set up backups**: Supabase automated backups
+5. **CI/CD**: GitHub Actions for automated testing before deploy
 
-Supabase provides automatic backups. To manual backup:
+---
 
-```bash
-# Export database
-pg_dump "postgresql://postgres:password@db.xxx.supabase.co:5432/postgres" > backup.sql
-
-# Restore
-psql "postgresql://postgres:password@db.xxx.supabase.co:5432/postgres" < backup.sql
-```
-
-### Application State
-
-All state is in the database. No application-level state to backup.
-
-## CI/CD Pipeline
-
-### GitHub Actions Example
-
-Create `.github/workflows/deploy.yml`:
-
-```yaml
-name: Deploy
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.21
-
-      - name: Run tests
-        run: go test -v ./...
-
-      - name: Build
-        run: go build -o server cmd/server/main.go
-
-      - name: Deploy to Railway
-        run: |
-          npm install -g @railway/cli
-          railway up
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-```
-
-## Support
-
-For issues or questions:
-- Check API documentation: `/docs/API.md`
-- Review logs: `docker logs lumen-api`
-- Verify environment variables
-- Test database connectivity
+**Status**: Both frontend and backend are deployed and running!
+**Frontend**: https://lumen-frontend-theta.vercel.app
+**Backend**: https://[railway-url] (check Railway dashboard for exact URL)
